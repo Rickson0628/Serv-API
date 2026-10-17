@@ -1,24 +1,27 @@
 require("dotenv").config();
+
 const express = require("express");
 const connectDB = require("./config/db");
 
-// Routes Imports
+// Route imports
 const providerRoutes = require("./routes/providerRoutes");
+const authRoutes = require("./routes/authRoutes");
 
 const app = express();
 const PORT = 5000;
+
 app.use(express.json());
 
-// Provider API routes
+// API routes
 app.use("/api/providers", providerRoutes);
+app.use("/api/auth", authRoutes);
 
 // Test route
 app.get("/", (req, res) => {
   res.send("Hello World");
 });
 
-
-// Server Start
+// Server start
 async function startServer() {
   try {
     await connectDB();

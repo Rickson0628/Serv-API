@@ -15,7 +15,6 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: true,
-      unique: true,
       lowercase: true,
       trim: true,
     },
@@ -25,8 +24,8 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["provider", "customer"],
-      required: true
+      enum: ["customer", "provider"],
+      required: true,
     },
     profilePicture: {
       type: String,
@@ -40,12 +39,31 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    passwordResetCode: {
+      type: String,
+      default: "",
+    },
+
+    passwordResetExpiresAt: {
+      type: Date,
+      default: null,
+    },
+
+    passwordResetVerified: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
   },
 );
 
+userSchema.index(
+  { email: 1, role: 1 },
+  { unique: true },
+);
+
 const User = mongoose.model("User", userSchema);
 
-module.exports = User;  
+module.exports = User;
