@@ -1,27 +1,10 @@
 require("dotenv").config();
 
-const express = require("express");
+const app = require("./app");
 const connectDB = require("./config/db");
 
-// Route imports
-const providerRoutes = require("./routes/providerRoutes");
-const authRoutes = require("./routes/authRoutes");
+const PORT = process.env.PORT || 5000;
 
-const app = express();
-const PORT = 5000;
-
-app.use(express.json());
-
-// API routes
-app.use("/api/providers", providerRoutes);
-app.use("/api/auth", authRoutes);
-
-// Test route
-app.get("/", (req, res) => {
-  res.send("Hello World");
-});
-
-// Server start
 async function startServer() {
   try {
     await connectDB();
@@ -30,7 +13,7 @@ async function startServer() {
       console.log("Listening to port", PORT);
     });
   } catch (error) {
-    console.error("Server failed to start");
+    console.error("Server failed to start", error);
   }
 }
 
