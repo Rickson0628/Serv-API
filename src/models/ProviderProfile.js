@@ -17,6 +17,17 @@ const serviceSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+
+    licensePhotos: {
+      type: [String],
+      default: [],
+    },
+
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+    },
   },
   {
     _id: false,
@@ -53,15 +64,10 @@ const providerProfileSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-       yearsOfExperience: {
+
+    yearsOfExperience: {
       type: Number,
       default: 0,
-    },
-
-    approvalStatus: {
-      type: String,
-      enum: ["pending", "approved", "rejected"],
-      default: "pending",
     },
 
     averageRating: {
