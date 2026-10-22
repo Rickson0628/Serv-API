@@ -1,12 +1,70 @@
+
 require("dotenv").config();
 
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const crypto = require("node:crypto");
 
 const User = require("../models/User");
 const PendingUser = require("../models/PendingUser");
-
 const sendEmail = require("../utils/sendEmail");
+
+const RESET_CODE_TTL_MS = 10 * 60 * 1000;
+const RESET_TOKEN_TTL_MS = 10 * 60 * 1000;
+const MAX_RESET_CODE_ATTEMPTS = 5;
+
+const resetCookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+  path: "/",
+};
+
+// Generate a cryptographically secure 6-digit code
+function generateSixDigitCode() {
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+// Hash a password reset code using a secret key
+function hashResetCode(userId, code) {
+  return crypto
+    .createHmac("sha256", process.env.RESET_CODE_SECRET)
+    .update(`${userId}:${code}`)
+    .digest("hex");
+}
+
+// Hash a random reset token
+function hashResetToken(token) {
+  return crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
+}
+
+// Issue a new password reset code
+async function issuePasswordResetCode(user) {
+  const code = generateSixDigitCode();
+
+  user.passwordResetCodeHash = hashResetCode(user._id, code);
+
+  user.passwordResetExpiresAt = new Date(
+    Date.now() + RESET_CODE_TTL_MS
+  );
+
+  user.passwordResetAttempts = 0;
+
+  // Invalidate previous reset authorization
+  user.passwordResetTokenHash = null;
+  user.passwordResetTokenExpiresAt = null;
+
+  await user.save();
+
+  return code;
+}
+
+// ======================================================
+// SIGNUP
+// ======================================================
 
 // Start signup and send verification code
 async function startSignup(req, res) {
@@ -19,7 +77,10 @@ async function startSignup(req, res) {
       });
     }
 
-    const existingUser = await User.findOne({ email, role });
+    const existingUser = await User.findOne({
+      email,
+      role,
+    });
 
     if (existingUser) {
       return res.status(409).json({
@@ -27,16 +88,12 @@ async function startSignup(req, res) {
       });
     }
 
-    const costFactor = 12;
-    const hashPassword = await bcrypt.hash(password, costFactor);
+    const hashPassword = await bcrypt.hash(password, 12);
 
-    // Generate 6-digit verification code
-    const verificationCode = Math.floor(
-      100000 + Math.random() * 900000,
-    ).toString();
+    const verificationCode = generateSixDigitCode();
 
     const verificationCodeExpiresAt = new Date(
-      Date.now() + 600000, // 10 minutes
+      Date.now() + 10 * 60 * 1000
     );
 
     const existingPendingUser = await PendingUser.findOne({
@@ -44,7 +101,6 @@ async function startSignup(req, res) {
       role,
     });
 
-    // Update existing pending signup instead of creating duplicates
     if (existingPendingUser) {
       existingPendingUser.firstName = firstName;
       existingPendingUser.lastName = lastName;
@@ -85,7 +141,7 @@ async function startSignup(req, res) {
         <p>If you did not create a Serv account, you can ignore this email.</p>
 
         <p>Thank you,<br>Serv Team</p>
-      `,
+      `
     );
 
     if (info.accepted && info.accepted.length > 0) {
@@ -106,7 +162,10 @@ async function startSignup(req, res) {
   }
 }
 
-// Verify signup email and create actual user
+// ======================================================
+// VERIFY SIGNUP EMAIL
+// ======================================================
+
 async function verifySignupEmail(req, res) {
   try {
     const { email, role, verificationCode } = req.body;
@@ -159,8 +218,20 @@ async function verifySignupEmail(req, res) {
       role: newUser.role,
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "1d",
+    const token = jwt.sign(
+      payload,
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1d",
+      }
+    );
+
+    res.cookie("sessionToken", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 24,
+      path: "/",
     });
 
     return res.status(201).json({
@@ -173,7 +244,6 @@ async function verifySignupEmail(req, res) {
         role: newUser.role,
         isVerified: newUser.isVerified,
       },
-      token,
     });
   } catch (err) {
     console.error(err);
@@ -184,7 +254,10 @@ async function verifySignupEmail(req, res) {
   }
 }
 
-// Resend signup verification code
+// ======================================================
+// RESEND SIGNUP VERIFICATION CODE
+// ======================================================
+
 async function resendSignupVerificationCode(req, res) {
   try {
     const { email, role } = req.body;
@@ -207,12 +280,10 @@ async function resendSignupVerificationCode(req, res) {
       });
     }
 
-    const verificationCode = Math.floor(
-      100000 + Math.random() * 900000,
-    ).toString();
+    const verificationCode = generateSixDigitCode();
 
     const verificationCodeExpiresAt = new Date(
-      Date.now() + 600000,
+      Date.now() + 10 * 60 * 1000
     );
 
     pendingUser.verificationCode = verificationCode;
@@ -239,7 +310,7 @@ async function resendSignupVerificationCode(req, res) {
         <p>If you did not request a new verification code, you can ignore this email.</p>
 
         <p>Thank you,<br>Serv Team</p>
-      `,
+      `
     );
 
     if (info.accepted && info.accepted.length > 0) {
@@ -261,7 +332,10 @@ async function resendSignupVerificationCode(req, res) {
   }
 }
 
-// Login user
+// ======================================================
+// LOGIN
+// ======================================================
+
 async function login(req, res) {
   try {
     const { email, password, role } = req.body;
@@ -285,7 +359,7 @@ async function login(req, res) {
 
     const isMatch = await bcrypt.compare(
       password,
-      currentUser.password,
+      currentUser.password
     );
 
     if (!isMatch) {
@@ -299,8 +373,20 @@ async function login(req, res) {
       role: currentUser.role,
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "1d",
+    const token = jwt.sign(
+      payload,
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1d",
+      }
+    );
+
+    res.cookie("sessionToken", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 24,
+      path: "/",
     });
 
     return res.status(200).json({
@@ -313,7 +399,6 @@ async function login(req, res) {
         role: currentUser.role,
         isVerified: currentUser.isVerified,
       },
-      token,
     });
   } catch (err) {
     console.error(err);
@@ -324,16 +409,26 @@ async function login(req, res) {
   }
 }
 
-// Send password reset code
+// ======================================================
+// FORGOT PASSWORD
+// ======================================================
+
 async function forgotPassword(req, res) {
   try {
     const { email, role } = req.body;
 
-    if (!["customer", "provider"].includes(role)) {
+    if (
+      typeof email !== "string" ||
+      !email.trim() ||
+      !["customer", "provider"].includes(role)
+    ) {
       return res.status(400).json({
-        message: "Invalid account type.",
+        message: "Invalid reset request.",
       });
     }
+
+    const successMessage =
+      "If an account exists with that email, a password reset code has been sent.";
 
     const existingUser = await User.findOne({
       email,
@@ -342,25 +437,13 @@ async function forgotPassword(req, res) {
 
     if (!existingUser) {
       return res.status(200).json({
-        message:
-          "If an account exists with that email, a password reset code has been sent.",
+        message: successMessage,
       });
     }
 
-    const passwordResetCode = Math.floor(
-      100000 + Math.random() * 900000,
-    ).toString();
-
-    const passwordResetExpiresAt = new Date(
-      Date.now() + 600000,
+    const passwordResetCode = await issuePasswordResetCode(
+      existingUser
     );
-
-    existingUser.passwordResetCode = passwordResetCode;
-    existingUser.passwordResetExpiresAt =
-      passwordResetExpiresAt;
-    existingUser.passwordResetVerified = false;
-
-    await existingUser.save();
 
     const info = await sendEmail(
       email,
@@ -378,13 +461,12 @@ async function forgotPassword(req, res) {
         <p>If you did not request a password reset, you can ignore this email.</p>
 
         <p>Thank you,<br>Serv Team</p>
-      `,
+      `
     );
 
     if (info.accepted && info.accepted.length > 0) {
       return res.status(200).json({
-        message:
-          "If an account exists with that email, a password reset code has been sent.",
+        message: successMessage,
       });
     }
 
@@ -400,49 +482,109 @@ async function forgotPassword(req, res) {
   }
 }
 
-// Verify password reset code
+// ======================================================
+// VERIFY PASSWORD RESET CODE
+// ======================================================
+
 async function verifyPasswordResetCode(req, res) {
   try {
     const { email, role, code } = req.body;
 
-    if (!["customer", "provider"].includes(role)) {
-      return res.status(400).json({
-        message: "Invalid account type.",
-      });
-    }
-
-    const existingUser = await User.findOne({
-      email,
-      role,
-    });
-
-    if (!existingUser) {
+    if (
+      typeof email !== "string" ||
+      !email.trim() ||
+      !["customer", "provider"].includes(role) ||
+      typeof code !== "string" ||
+      !/^\d{6}$/.test(code)
+    ) {
       return res.status(400).json({
         message: "Invalid verification request.",
       });
     }
 
-    if (existingUser.passwordResetCode !== code) {
-      return res.status(401).json({
-        message: "Invalid verification code.",
-      });
-    }
+    const user = await User.findOne({
+      email,
+      role,
+    });
 
-    if (existingUser.passwordResetExpiresAt < new Date()) {
+    if (!user) {
       return res.status(400).json({
-        message:
-          "Verification code has expired. Please request a new code.",
+        message: "Invalid or expired verification code.",
       });
     }
 
-    existingUser.passwordResetVerified = true;
+    // Generate temporary reset authorization
+    const resetToken = crypto
+      .randomBytes(32)
+      .toString("hex");
 
-    await existingUser.save();
+    // Verify and consume the code atomically
+    const verifiedUser = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        passwordResetCodeHash: hashResetCode(
+          user._id,
+          code
+        ),
+        passwordResetExpiresAt: {
+          $gt: new Date(),
+        },
+        passwordResetAttempts: {
+          $lt: MAX_RESET_CODE_ATTEMPTS,
+        },
+      },
+      {
+        $set: {
+          passwordResetTokenHash:
+            hashResetToken(resetToken),
+
+          passwordResetTokenExpiresAt: new Date(
+            Date.now() + RESET_TOKEN_TTL_MS
+          ),
+        },
+        $unset: {
+          passwordResetCodeHash: "",
+          passwordResetExpiresAt: "",
+        },
+      }
+    );
+
+    if (!verifiedUser) {
+      // Count incorrect verification attempts
+      await User.updateOne(
+        {
+          _id: user._id,
+          passwordResetCodeHash: {
+            $exists: true,
+            $ne: null,
+          },
+          passwordResetExpiresAt: {
+            $gt: new Date(),
+          },
+          passwordResetAttempts: {
+            $lt: MAX_RESET_CODE_ATTEMPTS,
+          },
+        },
+        {
+          $inc: {
+            passwordResetAttempts: 1,
+          },
+        }
+      );
+
+      return res.status(400).json({
+        message: "Invalid or expired verification code.",
+      });
+    }
+
+    // Set separate password-reset cookie
+    res.cookie("resetToken", resetToken, {
+      ...resetCookieOptions,
+      maxAge: RESET_TOKEN_TTL_MS,
+    });
 
     return res.status(200).json({
       message: "Password reset code verified successfully.",
-      email,
-      role,
     });
   } catch (err) {
     console.error(err);
@@ -453,16 +595,26 @@ async function verifyPasswordResetCode(req, res) {
   }
 }
 
-// Resend password reset code
+// ======================================================
+// RESEND PASSWORD RESET CODE
+// ======================================================
+
 async function resendPasswordResetCode(req, res) {
   try {
     const { email, role } = req.body;
 
-    if (!["customer", "provider"].includes(role)) {
+    if (
+      typeof email !== "string" ||
+      !email.trim() ||
+      !["customer", "provider"].includes(role)
+    ) {
       return res.status(400).json({
-        message: "Invalid account type.",
+        message: "Invalid reset request.",
       });
     }
+
+    const successMessage =
+      "If an account exists with that email, a new password reset code has been sent.";
 
     const user = await User.findOne({
       email,
@@ -471,25 +623,13 @@ async function resendPasswordResetCode(req, res) {
 
     if (!user) {
       return res.status(200).json({
-        message:
-          "If an account exists with that email, a new password reset code has been sent.",
+        message: successMessage,
       });
     }
 
-    const passwordResetCode = Math.floor(
-      100000 + Math.random() * 900000,
-    ).toString();
-
-    const passwordResetExpiresAt = new Date(
-      Date.now() + 600000,
+    const passwordResetCode = await issuePasswordResetCode(
+      user
     );
-
-    user.passwordResetCode = passwordResetCode;
-    user.passwordResetExpiresAt =
-      passwordResetExpiresAt;
-    user.passwordResetVerified = false;
-
-    await user.save();
 
     const info = await sendEmail(
       email,
@@ -509,18 +649,17 @@ async function resendPasswordResetCode(req, res) {
         <p>If you did not request this, you can ignore this email.</p>
 
         <p>Thank you,<br>Serv Team</p>
-      `,
+      `
     );
 
     if (info.accepted && info.accepted.length > 0) {
       return res.status(200).json({
-        message:
-          "If an account exists with that email, a new password reset code has been sent.",
+        message: successMessage,
       });
     }
 
     return res.status(500).json({
-      message: "Unable to send password reset email.",
+      message: "Unable to send verification email.",
     });
   } catch (err) {
     console.error(err);
@@ -531,54 +670,84 @@ async function resendPasswordResetCode(req, res) {
   }
 }
 
-// Reset password after successful verification
+// ======================================================
+// RESET PASSWORD
+// ======================================================
+
 async function resetPassword(req, res) {
   try {
-    const { email, role, newPassword } = req.body;
+    const { newPassword } = req.body;
 
-    if (!["customer", "provider"].includes(role)) {
-      return res.status(400).json({
-        message: "Invalid account type.",
+    const resetToken = req.cookies?.resetToken;
+
+    if (
+      typeof resetToken !== "string" ||
+      !/^[a-f0-9]{64}$/.test(resetToken)
+    ) {
+      return res.status(401).json({
+        message: "Password reset authorization required.",
       });
     }
 
-    const user = await User.findOne({
-      email,
-      role,
+    if (
+      typeof newPassword !== "string" ||
+      newPassword.length < 8
+    ) {
+      return res.status(400).json({
+        message: "Password must contain at least 8 characters.",
+      });
+    }
+
+    const tokenHash = hashResetToken(resetToken);
+
+    const resetUser = await User.findOne({
+      passwordResetTokenHash: tokenHash,
+      passwordResetTokenExpiresAt: {
+        $gt: new Date(),
+      },
     });
 
-    if (!user) {
-      return res.status(400).json({
-        message: "Password reset verification is required.",
+    if (!resetUser) {
+      return res.status(401).json({
+        message: "Invalid or expired reset token.",
       });
     }
 
-    if (!user.passwordResetVerified) {
-      return res.status(400).json({
-        message: "Password reset verification is required.",
-      });
-    }
-
-    if (user.passwordResetExpiresAt < new Date()) {
-      return res.status(400).json({
-        message:
-          "Password reset session has expired. Please request a new code.",
-      });
-    }
-
-    const hashPassword = await bcrypt.hash(
+    const hashedPassword = await bcrypt.hash(
       newPassword,
-      12,
+      12
     );
 
-    user.password = hashPassword;
+    // Atomically change password and consume reset token
+    const updatedUser = await User.findOneAndUpdate(
+      {
+        _id: resetUser._id,
+        passwordResetTokenHash: tokenHash,
+        passwordResetTokenExpiresAt: {
+          $gt: new Date(),
+        },
+      },
+      {
+        $set: {
+          password: hashedPassword,
+        },
+        $unset: {
+          passwordResetTokenHash: "",
+          passwordResetTokenExpiresAt: "",
+          passwordResetCodeHash: "",
+          passwordResetExpiresAt: "",
+        },
+      }
+    );
 
-    // Clear password reset information
-    user.passwordResetCode = "";
-    user.passwordResetExpiresAt = null;
-    user.passwordResetVerified = false;
+    if (!updatedUser) {
+      return res.status(401).json({
+        message: "Invalid or expired reset token.",
+      });
+    }
 
-    await user.save();
+    // Remove temporary reset cookie
+    res.clearCookie("resetToken", resetCookieOptions);
 
     return res.status(200).json({
       message: "Password changed successfully.",
@@ -592,11 +761,23 @@ async function resetPassword(req, res) {
   }
 }
 
-// Get current logged-in user
+// ======================================================
+// GET CURRENT LOGGED-IN USER
+// ======================================================
+
 async function getCurrentUser(req, res) {
   try {
-    const user = await User.findById(req.user.id).select(
-      "-password -passwordResetCode -passwordResetExpiresAt -passwordResetVerified",
+    const user = await User.findById(
+      req.user.id
+    ).select(
+      "-password " +
+      "-passwordResetCode " +
+      "-passwordResetVerified " +
+      "-passwordResetCodeHash " +
+      "-passwordResetExpiresAt " +
+      "-passwordResetAttempts " +
+      "-passwordResetTokenHash " +
+      "-passwordResetTokenExpiresAt"
     );
 
     if (!user) {
@@ -617,6 +798,29 @@ async function getCurrentUser(req, res) {
   }
 }
 
+// ======================================================
+// LOG OUT
+// ======================================================
+
+async function logout(req,res){
+   res.clearCookie("sessionToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+  });
+
+   return res.status(200).json({
+    message: "Logged out successfully.",
+  });
+
+}
+
+
+// ======================================================
+// EXPORTS
+// ======================================================
+
 module.exports = {
   startSignup,
   verifySignupEmail,
@@ -627,4 +831,5 @@ module.exports = {
   resendPasswordResetCode,
   resetPassword,
   getCurrentUser,
+  logout,
 };
