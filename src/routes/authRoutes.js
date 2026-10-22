@@ -13,6 +13,7 @@ const {
   resendPasswordResetCode,
   resetPassword,
   getCurrentUser,
+  logout,
 } = require("../controllers/authController");
 
 // Signup
@@ -22,6 +23,9 @@ router.post("/resend-verification", resendSignupVerificationCode);
 
 // Login
 router.post("/login", login);
+
+//Logout
+router.post('/logout', logout )
 
 // Password reset
 router.post("/forgot-password", forgotPassword);
