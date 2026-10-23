@@ -39,41 +39,47 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    termsVersion: {
+      type: String,
+      required: true,
+    },
+    termsAcceptedAt: {
+      type: Date,
+      required: true,
+    },
+
     passwordResetCode: {
       type: String,
       default: "",
     },
 
-   passwordResetCodeHash: {
-  type: String,
-  default: null,
-},
-passwordResetExpiresAt: {
-  type: Date,
-  default: null,
-},
-passwordResetAttempts: {
-  type: Number,
-  default: 0,
-},
-passwordResetTokenHash: {
-  type: String,
-  default: null,
-},
-passwordResetTokenExpiresAt: {
-  type: Date,
-  default: null,
-},
+    passwordResetCodeHash: {
+      type: String,
+      default: null,
+    },
+    passwordResetExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    passwordResetAttempts: {
+      type: Number,
+      default: 0,
+    },
+    passwordResetTokenHash: {
+      type: String,
+      default: null,
+    },
+    passwordResetTokenExpiresAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   },
 );
 
-userSchema.index(
-  { email: 1, role: 1 },
-  { unique: true },
-);
+userSchema.index({ email: 1, role: 1 }, { unique: true });
 
 const User = mongoose.model("User", userSchema);
 
