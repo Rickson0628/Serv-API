@@ -39,16 +39,21 @@ const pendingUserSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    
+    termsVersion: {
+      type: String,
+      required: true,
+    },
+    termsAcceptedAt: {
+      type: Date,
+      required: true,
+    },
   },
   {
     timestamps: true,
   },
 );
-pendingUserSchema.index(
-  { email: 1, role: 1 },
-  { unique: true },
-);
-
+pendingUserSchema.index({ email: 1, role: 1 }, { unique: true });
 
 const PendingUser = mongoose.model("PendingUser", pendingUserSchema);
 

@@ -9,6 +9,7 @@ const User = require("../models/User");
 const PendingUser = require("../models/PendingUser");
 const sendEmail = require("../utils/sendEmail");
 
+const CURRENT_TERMS_VERSION = "1.0";
 const RESET_CODE_TTL_MS = 10 * 60 * 1000;
 const RESET_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_RESET_CODE_ATTEMPTS = 5;
@@ -69,7 +70,13 @@ async function issuePasswordResetCode(user) {
 // Start signup and send verification code
 async function startSignup(req, res) {
   try {
-    const { firstName, lastName, email, password, role } = req.body;
+    const { firstName, lastName, email, password, role, agreeToTerms } = req.body;
+
+    if (agreeToTerms !== true) {
+      return res.status(400).json({
+        message: "You must agree to the Terms of Service.",
+      });
+    }
 
     if (!["customer", "provider"].includes(role)) {
       return res.status(400).json({
@@ -109,6 +116,8 @@ async function startSignup(req, res) {
       existingPendingUser.verificationCode = verificationCode;
       existingPendingUser.verificationCodeExpiresAt =
         verificationCodeExpiresAt;
+      existingPendingUser.termsVersion= CURRENT_TERMS_VERSION;
+      existingPendingUser.termsAcceptedAt= new Date();
 
       await existingPendingUser.save();
     } else {
@@ -118,8 +127,11 @@ async function startSignup(req, res) {
         email,
         password: hashPassword,
         role,
+        termsVersion: CURRENT_TERMS_VERSION,
+        termsAcceptedAt: new Date(),
         verificationCode,
         verificationCodeExpiresAt,
+
       });
     }
 
@@ -207,6 +219,8 @@ async function verifySignupEmail(req, res) {
       password: pendingUser.password,
       role: pendingUser.role,
       isVerified: true,
+      termsVersion: pendingUser.termsVersion,
+      termsAcceptedAt: pendingUser.termsAcceptedAt
     });
 
     await PendingUser.deleteOne({
